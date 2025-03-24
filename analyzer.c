@@ -1,8 +1,8 @@
-#include 
-#include 
-#include 
-#include 
-#include 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <json-c/json.h>
 
 // json_key_is_null 함수는 json_object에서 특정 키가 null인지 확인합니다.
 bool json_key_is_null(json_object* json, const char* key) {
