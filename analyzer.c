@@ -9,36 +9,43 @@ typedef struct {
 } Parameter;
 
 typedef struct {
-    int total_functions;
-    char** return_types;
+    char* name;
+    char* return_type;
     Parameter** parameters;
-    int total_if_conditions;
-} ASTAnalysisResult;
+    int parameter_count;
+    int if_condition_count;
+} FunctionInfo;
 
-// 함수 프로토타입 선언
-int count_functions(cJSON* node);
-char** extract_function_return_types(cJSON* node, int* count);
-Parameter** extract_function_parameters(cJSON* node, int* count);
-int count_if_conditions(cJSON* node);
-void free_analysis_result(ASTAnalysisResult* result);
+// 함수 정보 구조체에 대한 메모리 해제 함수
+void free_function_info(FunctionInfo* info) {
+    if (info == NULL) return;
+    
+    free(info->name);
+    free(info->return_type);
+    
+    for (int i = 0; i < info->parameter_count; i++) {
+        free(info->parameters[i]->name);
+        free(info->parameters[i]->type);
+        free(info->parameters[i]);
+    }
+    free(info->parameters);
+}
 
-// 재귀적으로 함수 개수 카운트
+// 함수 개수 카운트
 int count_functions(cJSON* node) {
     if (!node) return 0;
     
     int count = 0;
     
-    // 함수 타입 확인
     if (cJSON_IsObject(node)) {
-        cJSON* type = cJSON_GetObjectItemCaseSensitive(node, "type");
-        if (type && cJSON_IsString(type)) {
-            if (strcmp(type->valuestring, "FunctionDeclaration") == 0 ||
-                strcmp(type->valuestring, "MethodDefinition") == 0) {
+        cJSON* nodetype = cJSON_GetObjectItemCaseSensitive(node, "_nodetype");
+        if (nodetype && cJSON_IsString(nodetype)) {
+            if (strcmp(nodetype->valuestring, "FuncDef") == 0) {
                 count++;
             }
         }
         
-        // 모든 객체 속성 재귀 탐색
+        // 재귀 탐색
         cJSON* child = node->child;
         while (child) {
             count += count_functions(child);
@@ -59,103 +66,86 @@ int count_functions(cJSON* node) {
 }
 
 // 함수 리턴 타입 추출
-char** extract_function_return_types(cJSON* node, int* count) {
-    if (!node || !count) return NULL;
+char* extract_function_return_type(cJSON* func_node) {
+    if (!func_node) return strdup("Unknown");
     
-    static char** return_types = NULL;
-    static int total_count = 0;
+    cJSON* decl = cJSON_GetObjectItemCaseSensitive(func_node, "decl");
+    if (!decl) return strdup("Unknown");
     
-    if (cJSON_IsObject(node)) {
-        cJSON* type = cJSON_GetObjectItemCaseSensitive(node, "type");
-        if (type && cJSON_IsString(type)) {
-            if (strcmp(type->valuestring, "FunctionDeclaration") == 0 ||
-                strcmp(type->valuestring, "MethodDefinition") == 0) {
-                
-                cJSON* return_type = cJSON_GetObjectItemCaseSensitive(node, "returnType");
-                if (return_type && cJSON_IsObject(return_type)) {
-                    cJSON* name = cJSON_GetObjectItemCaseSensitive(return_type, "name");
-                    
-                    return_types = realloc(return_types, (total_count + 1) * sizeof(char*));
-                    return_types[total_count] = strdup(name ? name->valuestring : "Unknown");
-                    total_count++;
-                }
-            }
-        }
-        
-        // 재귀 탐색
-        cJSON* child = node->child;
-        while (child) {
-            extract_function_return_types(child, count);
-            child = child->next;
-        }
-    }
+    cJSON* type = cJSON_GetObjectItemCaseSensitive(decl, "type");
+    if (!type) return strdup("Unknown");
     
-    // 배열 처리
-    if (cJSON_IsArray(node)) {
-        int size = cJSON_GetArraySize(node);
-        for (int i = 0; i < size; i++) {
-            cJSON* item = cJSON_GetArrayItem(node, i);
-            extract_function_return_types(item, count);
-        }
-    }
+    cJSON* type_type = cJSON_GetObjectItemCaseSensitive(type, "type");
+    if (!type_type) return strdup("Unknown");
     
-    *count = total_count;
-    return return_types;
+    cJSON* names = cJSON_GetObjectItemCaseSensitive(type_type, "names");
+    if (!names || !cJSON_IsArray(names)) return strdup("Unknown");
+    
+    cJSON* name = cJSON_GetArrayItem(names, 0);
+    return strdup(name->valuestring);
+}
+
+// 함수 이름 추출
+char* extract_function_name(cJSON* func_node) {
+    if (!func_node) return strdup("Unknown");
+    
+    cJSON* decl = cJSON_GetObjectItemCaseSensitive(func_node, "decl");
+    if (!decl) return strdup("Unknown");
+    
+    cJSON* name = cJSON_GetObjectItemCaseSensitive(decl, "name");
+    if (!name) return strdup("Unknown");
+    
+    return strdup(name->valuestring);
 }
 
 // 함수 파라미터 추출
-Parameter** extract_function_parameters(cJSON* node, int* count) {
-    if (!node || !count) return NULL;
+Parameter** extract_function_parameters(cJSON* func_node, int* param_count) {
+    if (!func_node || !param_count) return NULL;
     
-    static Parameter** parameters = NULL;
-    static int total_count = 0;
+    *param_count = 0;
+    Parameter** parameters = NULL;
     
-    if (cJSON_IsObject(node)) {
-        cJSON* type = cJSON_GetObjectItemCaseSensitive(node, "type");
-        if (type && cJSON_IsString(type)) {
-            if (strcmp(type->valuestring, "FunctionDeclaration") == 0 ||
-                strcmp(type->valuestring, "MethodDefinition") == 0) {
-                
-                cJSON* params = cJSON_GetObjectItemCaseSensitive(node, "params");
-                if (params && cJSON_IsArray(params)) {
-                    int param_size = cJSON_GetArraySize(params);
-                    
-                    for (int i = 0; i < param_size; i++) {
-                        cJSON* param = cJSON_GetArrayItem(params, i);
-                        
-                        parameters = realloc(parameters, (total_count + 1) * sizeof(Parameter*));
-                        parameters[total_count] = malloc(sizeof(Parameter));
-                        
-                        cJSON* name = cJSON_GetObjectItemCaseSensitive(param, "name");
-                        cJSON* param_type = cJSON_GetObjectItemCaseSensitive(param, "type");
-                        
-                        parameters[total_count]->name = strdup(name ? name->valuestring : "Unknown");
-                        parameters[total_count]->type = strdup(param_type ? param_type->valuestring : "Unknown");
-                        
-                        total_count++;
-                    }
-                }
-            }
+    cJSON* decl = cJSON_GetObjectItemCaseSensitive(func_node, "decl");
+    if (!decl) return NULL;
+    
+    cJSON* type = cJSON_GetObjectItemCaseSensitive(decl, "type");
+    if (!type) return NULL;
+    
+    cJSON* args = cJSON_GetObjectItemCaseSensitive(type, "args");
+    if (!args) return NULL;
+    
+    cJSON* params = cJSON_GetObjectItemCaseSensitive(args, "params");
+    if (!params || !cJSON_IsArray(params)) return NULL;
+    
+    int size = cJSON_GetArraySize(params);
+    parameters = malloc(size * sizeof(Parameter*));
+    
+    for (int i = 0; i < size; i++) {
+        cJSON* param = cJSON_GetArrayItem(params, i);
+        parameters[i] = malloc(sizeof(Parameter));
+        
+        // 파라미터 타입 추출
+        cJSON* param_type = cJSON_GetObjectItemCaseSensitive(param, "type");
+        cJSON* type_details = cJSON_GetObjectItemCaseSensitive(param_type, "type");
+        cJSON* type_names = cJSON_GetObjectItemCaseSensitive(type_details, "names");
+        
+        if (type_names && cJSON_IsArray(type_names)) {
+            cJSON* type_name = cJSON_GetArrayItem(type_names, 0);
+            parameters[i]->type = strdup(type_name->valuestring);
+        } else {
+            parameters[i]->type = strdup("Unknown");
         }
         
-        // 재귀 탐색
-        cJSON* child = node->child;
-        while (child) {
-            extract_function_parameters(child, count);
-            child = child->next;
+        // 파라미터 이름 추출
+        cJSON* name = cJSON_GetObjectItemCaseSensitive(param, "name");
+        if (name) {
+            parameters[i]->name = strdup(name->valuestring);
+        } else {
+            parameters[i]->name = strdup("Unknown");
         }
     }
     
-    // 배열 처리
-    if (cJSON_IsArray(node)) {
-        int size = cJSON_GetArraySize(node);
-        for (int i = 0; i < size; i++) {
-            cJSON* item = cJSON_GetArrayItem(node, i);
-            extract_function_parameters(item, count);
-        }
-    }
-    
-    *count = total_count;
+    *param_count = size;
     return parameters;
 }
 
@@ -166,9 +156,9 @@ int count_if_conditions(cJSON* node) {
     int count = 0;
     
     if (cJSON_IsObject(node)) {
-        cJSON* type = cJSON_GetObjectItemCaseSensitive(node, "type");
-        if (type && cJSON_IsString(type)) {
-            if (strcmp(type->valuestring, "IfStatement") == 0) {
+        cJSON* nodetype = cJSON_GetObjectItemCaseSensitive(node, "_nodetype");
+        if (nodetype && cJSON_IsString(nodetype)) {
+            if (strcmp(nodetype->valuestring, "If") == 0) {
                 count++;
             }
         }
@@ -191,25 +181,6 @@ int count_if_conditions(cJSON* node) {
     }
     
     return count;
-}
-
-// 분석 결과 메모리 해제
-void free_analysis_result(ASTAnalysisResult* result) {
-    if (!result) return;
-    
-    // 리턴 타입 해제
-    for (int i = 0; i < result->total_functions; i++) {
-        free(result->return_types[i]);
-    }
-    free(result->return_types);
-    
-    // 파라미터 해제
-    for (int i = 0; i < result->total_functions; i++) {
-        free(result->parameters[i]->name);
-        free(result->parameters[i]->type);
-        free(result->parameters[i]);
-    }
-    free(result->parameters);
 }
 
 int main() {
@@ -240,42 +211,84 @@ int main() {
         return 1;
     }
     
-    // 분석 결과 초기화
-    ASTAnalysisResult result = {0};
-    
     // 함수 개수 카운트
-    result.total_functions = count_functions(root);
+    int total_functions = count_functions(root);
+    printf("총 함수 개수: %d\n", total_functions);
     
-    // 리턴 타입 추출
-    int return_type_count;
-    result.return_types = extract_function_return_types(root, &return_type_count);
+    // 함수 정보 배열 동적 할당
+    FunctionInfo* functions = malloc(total_functions * sizeof(FunctionInfo));
     
-    // 파라미터 추출
-    int parameter_count;
-    result.parameters = extract_function_parameters(root, &parameter_count);
+    // 함수 정보 추출을 위한 인덱스
+    int func_index = 0;
     
-    // if 조건문 개수 카운트
-    result.total_if_conditions = count_if_conditions(root);
-    
-    // 결과 출력
-    printf("총 함수 개수: %d\n", result.total_functions);
-    
-    printf("\n리턴 타입:\n");
-    for (int i = 0; i < return_type_count; i++) {
-        printf("- %s\n", result.return_types[i]);
+    // 재귀 함수로 함수 정보 추출
+    void extract_function_info(cJSON* node) {
+        if (!node) return;
+        
+        if (cJSON_IsObject(node)) {
+            cJSON* nodetype = cJSON_GetObjectItemCaseSensitive(node, "_nodetype");
+            if (nodetype && cJSON_IsString(nodetype)) {
+                if (strcmp(nodetype->valuestring, "FuncDef") == 0) {
+                    // 현재 함수의 리턴 타입 추출
+                    functions[func_index].return_type = extract_function_return_type(node);
+                    
+                    // 함수 이름 추출
+                    functions[func_index].name = extract_function_name(node);
+                    
+                    // 파라미터 추출
+                    functions[func_index].parameters = extract_function_parameters(node, &functions[func_index].parameter_count);
+                    
+                    // if 조건문 개수 카운트
+                    functions[func_index].if_condition_count = count_if_conditions(node);
+                    
+                    func_index++;
+                }
+            }
+            
+            // 재귀 탐색
+            cJSON* child = node->child;
+            while (child) {
+                extract_function_info(child);
+                child = child->next;
+            }
+        }
+        
+        // 배열 처리
+        if (cJSON_IsArray(node)) {
+            int size = cJSON_GetArraySize(node);
+            for (int i = 0; i < size; i++) {
+                cJSON* item = cJSON_GetArrayItem(node, i);
+                extract_function_info(item);
+            }
+        }
     }
     
-    printf("\n파라미터:\n");
-    for (int i = 0; i < parameter_count; i++) {
-        printf("- 이름: %s, 타입: %s\n", 
-               result.parameters[i]->name, 
-               result.parameters[i]->type);
-    }
+    // 함수 정보 추출
+    extract_function_info(root);
     
-    printf("\nif 조건문 개수: %d\n", result.total_if_conditions);
+    // 추출된 함수 정보 출력
+    printf("\n함수 상세 정보:\n");
+    for (int i = 0; i < total_functions; i++) {
+        printf("\n함수 %d:\n", i+1);
+        printf("- 이름: %s\n", functions[i].name);
+        printf("- 리턴 타입: %s\n", functions[i].return_type);
+        
+        printf("- 파라미터:\n");
+        for (int j = 0; j < functions[i].parameter_count; j++) {
+            printf("  * 이름: %s, 타입: %s\n", 
+                   functions[i].parameters[j]->name, 
+                   functions[i].parameters[j]->type);
+        }
+        
+        printf("- if 조건문 개수: %d\n", functions[i].if_condition_count);
+    }
     
     // 메모리 해제
-    free_analysis_result(&result);
+    for (int i = 0; i < total_functions; i++) {
+        free_function_info(&functions[i]);
+    }
+    free(functions);
+    
     cJSON_Delete(root);
     
     return 0;
